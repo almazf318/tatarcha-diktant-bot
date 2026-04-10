@@ -20,12 +20,8 @@ KNOWLEDGE BASE:
 """
 
 
-def get_model():
-    global _model
-    if _model is None:
-        genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-        _model = genai.GenerativeModel("gemini-2.0-flash")
-    return _model
+def init_genai():
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
 
 def build_knowledge_base() -> str:
@@ -38,20 +34,28 @@ def build_knowledge_base() -> str:
     return "\n\n".join(parts)
 
 
+_initialized = False
+
+
 def ask(question: str, lang: str) -> tuple[str, bool]:
     """Returns (answer, is_off_topic)."""
+    global _initialized
+    if not _initialized:
+        init_genai()
+        _initialized = True
+
     kb = build_knowledge_base()
     system = SYSTEM_PROMPT_TEMPLATE.format(lang=lang, knowledge_base=kb)
 
-    model = get_model()
-    response = model.generate_content(
-        contents=question,
+    model = genai.GenerativeModel(
+        model_name="gemini-2.0-flash",
+        system_instruction=system,
         generation_config=genai.types.GenerationConfig(
             max_output_tokens=1024,
             temperature=0.3,
         ),
-        system_instruction=system,
     )
+    response = model.generate_content(contents=question)
 
     answer = response.text.strip()
 
