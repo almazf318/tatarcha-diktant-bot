@@ -1,8 +1,11 @@
 import os
-import google.generativeai as genai
+import logging
+from groq import Groq
 import db
 
-_model = None
+logger = logging.getLogger(__name__)
+
+_client: Groq | None = None
 
 SYSTEM_PROMPT_TEMPLATE = """You are an assistant for the "Tatarcha Dictant" (Татарча диктант) event — a worldwide educational campaign to test Tatar language literacy.
 
@@ -20,8 +23,11 @@ KNOWLEDGE BASE:
 """
 
 
-def init_genai():
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+def get_client() -> Groq:
+    global _client
+    if _client is None:
+        _client = Groq(api_key=os.environ["GROQ_API_KEY"])
+    return _client
 
 
 def build_knowledge_base() -> str:
@@ -34,30 +40,22 @@ def build_knowledge_base() -> str:
     return "\n\n".join(parts)
 
 
-_initialized = False
-
-
 def ask(question: str, lang: str) -> tuple[str, bool]:
     """Returns (answer, is_off_topic)."""
-    global _initialized
-    if not _initialized:
-        init_genai()
-        _initialized = True
-
     kb = build_knowledge_base()
     system = SYSTEM_PROMPT_TEMPLATE.format(lang=lang, knowledge_base=kb)
 
-    model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
-        system_instruction=system,
-        generation_config=genai.types.GenerationConfig(
-            max_output_tokens=1024,
-            temperature=0.3,
-        ),
+    response = get_client().chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": question},
+        ],
+        max_tokens=1024,
+        temperature=0.3,
     )
-    response = model.generate_content(contents=question)
 
-    answer = response.text.strip()
+    answer = response.choices[0].message.content.strip()
 
     if answer == "OFF_TOPIC" or answer.startswith("OFF_TOPIC"):
         return answer, True
