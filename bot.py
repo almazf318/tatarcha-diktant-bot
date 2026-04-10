@@ -1,7 +1,7 @@
 import os
 import logging
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -27,18 +27,19 @@ MAX_QUESTION_LENGTH = int(os.getenv("MAX_QUESTION_LENGTH", "500"))
 LANG_MAP = {"lang_ru": "ru", "lang_tt": "tt", "lang_en": "en"}
 LANG_SYSTEM = {"ru": "русском", "tt": "татар", "en": "English"}
 
-BTN_HELP_TEXTS = {"ℹ️ Ярдәм / Помощь", "ℹ️ Ярдәм / Help"}
-BTN_LANG_TEXTS = {"🌐 Тел / Язык", "🌐 Тел / Language"}
 
-
-def main_keyboard(lang: str) -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        [[t(lang, "btn_help"), t(lang, "btn_lang")]],
-        resize_keyboard=True,
+def menu_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(t(lang, "btn_help"), callback_data="action_help"),
+                InlineKeyboardButton(t(lang, "btn_lang"), callback_data="action_lang"),
+            ]
+        ]
     )
 
 
-def lang_inline_keyboard() -> InlineKeyboardMarkup:
+def lang_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
@@ -60,37 +61,60 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.upsert_user(user.id, user.username, user.first_name, lang)
     await update.message.reply_text(
         t(lang, "welcome"),
-        reply_markup=main_keyboard(lang),
+        reply_markup=menu_keyboard(lang),
     )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = await get_lang(update.effective_user.id)
-    await update.message.reply_text(t(lang, "help"))
+    await update.message.reply_text(
+        t(lang, "help"),
+        reply_markup=menu_keyboard(lang),
+    )
 
 
 async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = await get_lang(update.effective_user.id)
     await update.message.reply_text(
         t(lang, "choose_lang"),
-        reply_markup=lang_inline_keyboard(),
+        reply_markup=lang_keyboard(),
     )
 
 
-async def lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    lang_code = LANG_MAP.get(query.data)
-    if not lang_code:
+
+    # Language selection
+    if query.data in LANG_MAP:
+        lang_code = LANG_MAP[query.data]
+        tg_id = query.from_user.id
+        db.set_user_lang(tg_id, lang_code)
+        db.upsert_user(tg_id, query.from_user.username, query.from_user.first_name, lang_code)
+        await query.edit_message_text(t(lang_code, "lang_set"))
+        await query.message.reply_text(
+            t(lang_code, "welcome"),
+            reply_markup=menu_keyboard(lang_code),
+        )
         return
-    tg_id = query.from_user.id
-    db.set_user_lang(tg_id, lang_code)
-    db.upsert_user(tg_id, query.from_user.username, query.from_user.first_name, lang_code)
-    await query.edit_message_text(t(lang_code, "lang_set"))
-    await query.message.reply_text(
-        t(lang_code, "welcome"),
-        reply_markup=main_keyboard(lang_code),
-    )
+
+    lang = await get_lang(query.from_user.id)
+
+    # Help button
+    if query.data == "action_help":
+        await query.message.reply_text(
+            t(lang, "help"),
+            reply_markup=menu_keyboard(lang),
+        )
+        return
+
+    # Language button
+    if query.data == "action_lang":
+        await query.message.reply_text(
+            t(lang, "choose_lang"),
+            reply_markup=lang_keyboard(),
+        )
+        return
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -98,18 +122,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = await get_lang(user.id)
     text = update.message.text.strip()
 
-    # Handle button presses
-    if text in BTN_HELP_TEXTS:
-        await update.message.reply_text(t(lang, "help"))
-        return
-    if text in BTN_LANG_TEXTS:
-        await update.message.reply_text(
-            t(lang, "choose_lang"),
-            reply_markup=lang_inline_keyboard(),
-        )
-        return
-
-    # Question handling
     if len(text) > MAX_QUESTION_LENGTH:
         await update.message.reply_text(t(lang, "too_long", limit=MAX_QUESTION_LENGTH))
         return
@@ -138,7 +150,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("lang", lang_cmd))
-    app.add_handler(CallbackQueryHandler(lang_callback, pattern="^lang_"))
+    app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot started")
